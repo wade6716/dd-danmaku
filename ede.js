@@ -243,6 +243,7 @@
         osdLineChartSkipFilter: { id: 'danmakuOsdLineChartSkipFilter', defaultValue: false, name: '弹幕高能进度条免过滤' },
         osdLineChartTime: { id: 'danmakuOsdLineChartTime', defaultValue: 10, name: '弹幕高能进度条颗粒度秒', min: 1, max: 60, step: 1  },
         osdHeaderClockEnable: { id: 'danmakuOsdHeaderClockEnable', defaultValue: false, name: '播放界面头中显示时钟' },
+        fullScreenVideoBottom: { id: 'danmakuFullScreenVideoBottom', defaultValue: true, name: '全屏宽屏视频置底' },
         timeoutCallbackUnit: { id: 'danmakuTimeoutCallbackUnit', defaultValue: 1, name: '定时单位' },
         timeoutCallbackValue: { id: 'danmakuTimeoutCallbackValue', defaultValue: 0, name: '定时值' },
         bangumiEnable: { id: 'danmakuBangumiEnable', defaultValue: false, name: '启用并填写个人令牌' },
@@ -1878,6 +1879,86 @@
         }
     }
 
+    const wrapperTop = 0; // 播放器 UI 顶部阴影
+
+    function isVideoFullscreen() {
+        if (
+            document.fullscreenElement ||
+            document.webkitFullscreenElement ||
+            document.mozFullScreenElement ||
+            document.msFullscreenElement
+        ) {
+            return true;
+        }
+        const _media = document.querySelector(mediaQueryStr);
+        if (_media && _media.webkitDisplayingFullscreen) {
+            return true;
+        }
+        if (
+            window.innerWidth === screen.width &&
+            window.innerHeight === screen.height
+        ) {
+            return true;
+        }
+        return false;
+    }
+
+    function updateVideoBottomLayout() {
+        const _media = document.querySelector(mediaQueryStr);
+        const wrapper = getById(eleIds.danmakuWrapper);
+        if (!_media || !wrapper) {
+            return;
+        }
+
+        const isFullscreen = isVideoFullscreen();
+        const isBottomEnabled = lsGetItem(lsKeys.fullScreenVideoBottom.id);
+
+        let isBottomApplied = false;
+
+        if (isFullscreen && isBottomEnabled) {
+            const vw = _media.videoWidth;
+            const vh = _media.videoHeight;
+            if (vw && vh && vw > 0 && vh > 0) {
+                const _container = document.querySelector(mediaContainerQueryStr) || _media.parentElement;
+                const cw = _container ? _container.clientWidth : window.innerWidth;
+                const ch = _container ? _container.clientHeight : window.innerHeight;
+
+                if (cw > 0 && ch > 0) {
+                    const containerRatio = cw / ch;
+                    const videoRatio = vw / vh;
+
+                    // 视频长宽比大于容器长宽比说明两边贴满、上下留黑（宽屏）
+                    if (videoRatio > containerRatio) {
+                        const renderedVideoHeight = cw / videoRatio;
+                        const totalBlackBar = ch - renderedVideoHeight;
+
+                        // 上下黑边合并后总高度足以容纳弹幕行（>= 24px）
+                        if (totalBlackBar >= 24) {
+                            _media.style.objectPosition = 'bottom';
+                            const targetHeight = Math.floor(totalBlackBar);
+                            wrapper.style.height = `${targetHeight}px`;
+                            isBottomApplied = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!isBottomApplied) {
+            _media.style.objectPosition = '';
+            wrapper.style.height = `calc(${lsGetItem(lsKeys.heightPercent.id)}% - ${wrapperTop}px)`;
+        }
+
+        if (window.ede && window.ede.danmaku) {
+            window.ede.danmaku.resize();
+        }
+    }
+
+    function onFullscreenChange() {
+        updateVideoBottomLayout();
+        setTimeout(updateVideoBottomLayout, 100);
+    }
+
     async function createDanmaku(comments) {
         if (!comments) { return; }
         if (window.ede.danmaku != null) {
@@ -1902,7 +1983,6 @@
         }
         if (!isVersionOld) { _media.style.position = 'absolute'; }
         // from https://github.com/Izumiko/jellyfin-danmaku/blob/jellyfin/ede.js#L1104
-        const wrapperTop = 0; // 播放器 UI 顶部阴影
         let wrapper = getById(eleIds.danmakuWrapper);
         wrapper && wrapper.remove();
         wrapper = document.createElement('div');
@@ -1939,13 +2019,25 @@
         window.ede.ob = new ResizeObserver(() => {
             if (window.ede.danmaku) {
                 console.log('Resizing');
-                window.ede.danmaku.resize();
+                updateVideoBottomLayout();
                 if (lsGetItem(lsKeys.osdLineChartEnable.id)) {
                     buildProgressBarChart(20);
                 }
             }
         });
         window.ede.ob.observe(_container);
+
+        document.removeEventListener('fullscreenchange', onFullscreenChange);
+        document.addEventListener('fullscreenchange', onFullscreenChange);
+        document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
+        document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+
+        _media.removeEventListener('loadedmetadata', updateVideoBottomLayout);
+        _media.addEventListener('loadedmetadata', updateVideoBottomLayout, { once: true });
+        _media.removeEventListener('canplay', updateVideoBottomLayout);
+        _media.addEventListener('canplay', updateVideoBottomLayout, { once: true });
+
+        updateVideoBottomLayout();
         // 自定义的 initH5VideoAdapter 下,解决暂停时暂停的弹幕再次加载会自动恢复问题
         if (_media.id) {
             require(['playbackManager'], (playbackManager) => {
@@ -3458,6 +3550,12 @@
             { label: lsKeys.osdHeaderClockEnable.name }, lsGetItem(lsKeys.osdHeaderClockEnable.id), (checked) => {
                 lsSetItem(lsKeys.osdHeaderClockEnable.id, checked);
                 checked ? addHeaderClock() : removeHeaderClock();
+            }
+        ));
+        getById(eleIds.osdCheckboxDiv).append(embyCheckbox(
+            { label: lsKeys.fullScreenVideoBottom.name }, lsGetItem(lsKeys.fullScreenVideoBottom.id), (checked) => {
+                lsSetItem(lsKeys.fullScreenVideoBottom.id, checked);
+                updateVideoBottomLayout();
             }
         ));
         getById(eleIds.osdLineChartDiv).append(embyCheckbox(
@@ -5053,6 +5151,15 @@
         destroyAllInterval();
         // 退出播放页面重置轴偏秒
         lsSetItem(lsKeys.timelineOffset.id, lsKeys.timelineOffset.defaultValue);
+        // 重置视频位置并清理全屏与元数据监听
+        const _media = document.querySelector(mediaQueryStr);
+        if (_media) {
+            _media.style.objectPosition = '';
+            _media.removeEventListener('loadedmetadata', updateVideoBottomLayout);
+            _media.removeEventListener('canplay', updateVideoBottomLayout);
+        }
+        document.removeEventListener('fullscreenchange', onFullscreenChange);
+        document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
     }
 
     function onViewShow(e) {
